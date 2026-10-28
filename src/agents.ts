@@ -1,0 +1,133 @@
+// Software versions of the three ECHO agents + Message Broker (see report, Chapter 5).
+// Vision Agent  -> publishes spatial data to the Message Broker
+// Haptic Agent  -> subscribes, turns proximity into vibration
+// Voice Agent   -> subscribes, filters real hazards, speaks + 3D-panned beep
+import '@tensorflow/tfjs';
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
+
+type Handler = (d: any) => void;
+class MessageBroker {
+  private topics: Record<string, Handler[]> = {};
+  subscribe(topic: string, h: Handler) {
+    (this.topics[topic] = this.topics[topic] || []).push(h);
+    return () => { this.topics[topic] = this.topics[topic].filter((x) => x !== h); };
+  }
+  publish(topic: string, data: any) { (this.topics[topic] || []).forEach((h) => h(data)); }
+}
+export const broker = new MessageBroker();
+
+// warnings and vibration only happen while navigating (or for the demo test button)
+export const state = { navigating: false };
+
+export type Det = {
+  label: string;
+  zone: 0 | 1 | 2;          // 0 left, 1 ahead (middle), 2 right
+  level: 0 | 1 | 2;         // 0 far, 1 near, 2 very close
+  area: number;
+  box: [number, number, number, number]; // x, y, w, h (0..1)
+};
+const SIDE = ['on your left', 'ahead', 'on your right'];
+const CLOSE = ['far away', 'near', 'very close'];
+
+/* ---------- Voice Agent ---------- */
+let ac: AudioContext | null = null;
+export function beep(zone: number, level: number) {
+  try {
+    ac = ac || new ((window as any).AudioContext || (window as any).webkitAudioContext)();
+    const o = ac!.createOscillator(), g = ac!.createGain(), p = ac!.createStereoPanner();
+    o.frequency.value = level === 2 ? 880 : 520;
+    g.gain.value = 0.25;
+    p.pan.value = zone === 0 ? -1 : zone === 2 ? 1 : 0;   // 3D pan left / right
+    o.connect(g); g.connect(p); p.connect(ac!.destination);
+    o.start(); o.stop(ac!.currentTime + (level === 2 ? 0.35 : 0.15));
+  } catch (e) {}
+}
+export const voice = {
+  speak(text: string, urgent = true) {
+    if (!('speechSynthesis' in window)) return;
+    if (urgent) speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.95;
+    speechSynthesis.speak(u);
+  },
+  stop() { if ('speechSynthesis' in window) speechSynthesis.cancel(); },
+};
+let lastWarn = 0;
+broker.subscribe('spatial', (d) => {
+  if (!state.navigating && !d.force) return;
+  // hazard threshold filter: ignore far clutter, warn only for near / very close
+  const hz: Det = d.detections.filter((x: Det) => x.level > 0).sort((a: Det, b: Det) => b.area - a.area)[0];
+  if (!hz || Date.now() - lastWarn < 3000) return;
+  lastWarn = Date.now();
+  beep(hz.zone, hz.level);
+  voice.speak(`${hz.label} ${SIDE[hz.zone]}, ${CLOSE[hz.level]}`);
+});
+
+/* ---------- Haptic Agent ---------- */
+broker.subscribe('spatial', (d) => {
+  if (!state.navigating && !d.force) return;
+  const m = Math.max(0, ...d.detections.map((x: Det) => x.level));
+  if (m && navigator.vibrate) navigator.vibrate(m === 2 ? [300, 80, 300] : [120]); // closer = stronger
+});
+
+/* ---------- Vision Agent ---------- */
+export const vision = {
+  model: null as any,
+  stream: null as MediaStream | null,
+  timer: 0 as any,
+  running: false,
+  last: [] as Det[],
+  async start(video: HTMLVideoElement, onCamera?: () => void) {
+    this.running = true;
+    this.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    video.srcObject = this.stream;
+    await video.play().catch(() => {});
+    onCamera && onCamera();
+    if (!this.model) this.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    const tick = async () => {
+      if (!this.running) return;
+      if (video.readyState >= 2 && video.videoWidth) {
+        try {
+          const W = video.videoWidth, H = video.videoHeight;
+          const preds = await this.model.detect(video);
+          const dets: Det[] = preds.filter((p: any) => p.score > 0.5).map((p: any) => {
+            const [x, y, w, h] = p.bbox;
+            const area = (w * h) / (W * H);
+            const cx = (x + w / 2) / W;
+            return {
+              label: p.class,
+              zone: cx < 0.33 ? 0 : cx > 0.67 ? 2 : 1,
+              level: area > 0.3 ? 2 : area > 0.1 ? 1 : 0,
+              area,
+              box: [x / W, y / H, w / W, h / H],
+            } as Det;
+          });
+          this.last = dets;
+          broker.publish('spatial', { detections: dets });
+        } catch (e) {}
+      }
+      this.timer = setTimeout(tick, 400);
+    };
+    tick();
+  },
+  stop() {
+    this.running = false;
+    clearTimeout(this.timer);
+    if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.last = [];
+  },
+  describe(): string {
+    if (!this.last.length) return 'I do not see anything clearly right now.';
+    const parts = [...this.last].sort((a, b) => b.area - a.area).slice(0, 4)
+      .map((d) => `a ${d.label} ${SIDE[d.zone]}, ${CLOSE[d.level]}`);
+    return 'I can see ' + parts.join('. ') + '.';
+  },
+  fake() { // backup for the demo: pretend an obstacle appeared
+    const zone = Math.floor(Math.random() * 3) as 0 | 1 | 2;
+    const level = (Math.random() > 0.5 ? 2 : 1) as 1 | 2;
+    const det: Det = { label: 'obstacle', zone, level, area: 0.2, box: [zone / 3 + 0.03, 0.25, 0.27, 0.5] };
+    lastWarn = 0;
+    broker.publish('spatial', { detections: [det], force: true });
+  },
+};

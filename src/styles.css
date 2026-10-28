@@ -1,0 +1,38 @@
+@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap');
+:root {
+  --bg: #efe9fb;        /* light lavender */
+  --card: #f9f6ff;
+  --ink: #2a1b5c;
+  --main: #5b3fc4;      /* big button */
+  --main-dark: #3f2a96;
+  --line: #c9bdf0;
+  --ok: #17673a;
+  --bad: #a11d2d;
+}
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink);
+  font-family: 'Atkinson Hyperlegible', system-ui, sans-serif; font-size: 20px; }
+.app { max-width: 520px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; min-height: 100dvh; }
+h1 { margin: 0; font-size: 32px; letter-spacing: .04em; }
+h2 { margin: 0 0 8px; font-size: 20px; }
+.speak { width: 100%; min-height: 36dvh; border: 0; border-radius: 28px; background: var(--main); color: #fff;
+  font: inherit; font-weight: 700; font-size: 34px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px; }
+.speak.listening { background: var(--main-dark); }
+.speak svg { width: 72px; height: 72px; }
+button:focus-visible, summary:focus-visible { outline: 5px solid #000; outline-offset: 3px; }
+.msg { background: var(--card); border: 2px solid var(--line); border-radius: 14px; padding: 14px; font-size: 22px; min-height: 80px; }
+.card { background: var(--card); border: 2px solid var(--line); border-radius: 14px; padding: 14px; }
+ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; justify-content: space-between; gap: 12px; font-size: 18px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.row:last-child { border-bottom: 0; padding-bottom: 0; }
+.row.connected span:last-child { color: var(--ok); font-weight: 700; }
+.row.off span:last-child { color: var(--bad); font-weight: 700; }
+.row.waiting span:last-child { font-weight: 700; }
+.cam { position: relative; height: 22dvh; margin: 0 auto; max-width: 100%; background: #d9cff5; border-radius: 12px; overflow: hidden; }
+.cam video, .cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
+details { background: var(--card); border: 2px solid var(--line); border-radius: 14px; padding: 12px; }
+summary { font-weight: 700; font-size: 18px; }
+.backup { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.backup button { font: inherit; font-size: 18px; font-weight: 700; min-height: 56px; border-radius: 12px;
+  border: 2px solid var(--main); background: #fff; color: var(--main-dark); }
