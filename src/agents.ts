@@ -29,7 +29,8 @@ export type Det = {
 const SIDE = ['on your left', 'ahead', 'on your right'];
 const CLOSE = ['far away', 'near', 'very close'];
 const DETECT_INTERVAL_MS = 900;
-const MODEL_DETECT_OPTIONS = { maxNumBoxes: 10, scoreThreshold: 0.6, iouThreshold: 0.4 };
+const MODEL_MAX_BOXES = 10;
+const MODEL_MIN_SCORE = 0.6;
 
 /* ---------- Voice Agent ---------- */
 let ac: AudioContext | null = null;
@@ -147,10 +148,10 @@ export const vision = {
       if (video.readyState >= 2 && video.videoWidth) {
         try {
           const W = video.videoWidth, H = video.videoHeight;
-          const preds = await this.model.detect(video, MODEL_DETECT_OPTIONS);
+          const preds = await this.model.detect(video, MODEL_MAX_BOXES, MODEL_MIN_SCORE);
           const dets: Det[] = preds
-            .filter((p: any) => p.score >= MODEL_DETECT_OPTIONS.scoreThreshold)
-            .slice(0, 10)
+            .filter((p: any) => p.score >= MODEL_MIN_SCORE)
+            .slice(0, MODEL_MAX_BOXES)
             .map((p: any) => {
               const [x, y, w, h] = p.bbox;
               const area = (w * h) / (W * H);
