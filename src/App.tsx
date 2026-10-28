@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { broker, voice, vision, state, beep, Det } from './agents';
 import { ROUTES } from './routes';
+import { talk, nice } from './talk';
+import { lookFor, EXTRA } from './finder';
 import './styles.css';
 
 type Dev = { s: 'connected' | 'off' | 'waiting'; note: string };
@@ -17,7 +19,7 @@ function Row({ name, d }: { name: string; d: Dev }) {
 }
 
 export default function App() {
-  const [msg, setMsg] = useState('Tap the big Speak button and say where you want to go.');
+  const [msg, setMsg] = useState(talk.greet());
   const [listening, setListening] = useState(false);
   const [ar, setAr] = useState(4 / 3);
   const [cam, setCam] = useState<Dev>({ s: 'waiting', note: '' });
@@ -37,32 +39,53 @@ export default function App() {
   const say = (t: string) => { setMsg(t); voice.speak(t); };
 
   /* ----- NavigationEngine (simple) ----- */
-  const speakStep = () => say(`Step ${step.current + 1} of ${route.current.length}. ${route.current[step.current]}`);
+  const speakStep = () => say(talk.step(step.current, route.current.length, route.current[step.current]));
   const startNav = (name: string) => {
     route.current = ROUTES[name]; step.current = 0; dest.current = name; state.navigating = true;
-    say(`Starting navigation to ${name}.`);
-    setTimeout(speakStep, 2200);
+    say(talk.start(name));
+    setTimeout(speakStep, 2600);
   };
   const nextStep = () => {
-    if (!state.navigating) return say('Navigation has not started. Say a destination first.');
+    if (!state.navigating) return say(talk.notStarted());
     step.current += 1;
-    if (step.current >= route.current.length) { state.navigating = false; return say(`You have arrived at ${dest.current}.`); }
+    if (step.current >= route.current.length) { state.navigating = false; return say(talk.arrive(dest.current)); }
     speakStep();
   };
-  const repeat = () => (state.navigating ? speakStep() : say('Navigation has not started.'));
-  const stopNav = () => { state.navigating = false; say('Navigation stopped.'); };
-  const around = () => say(vision.describe());
+  const repeat = () => (state.navigating ? speakStep() : say(talk.notStarted()));
+  const stopNav = () => { state.navigating = false; say(talk.stopped()); };
+  const around = () => say(talk.describe(vision.last));
+  // "look closer": slower, but knows many more objects (glasses, headphones, keys...)
+  const closer = async (labels: string[], wanted?: string) => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) return say(talk.noCamera());
+    say(talk.thinking());
+    try {
+      const found = await lookFor(v, labels);
+      say(wanted ? talk.found(wanted, found) : talk.describe(found));
+    } catch (e) { say(talk.closerFailed()); }
+  };
+  const find = (what: string) => {
+    const live = vision.last.filter((d) => d.label.includes(what) || (d.cls || '').includes(what));
+    if (live.length) return say(talk.found(what, live));
+    closer([what], what);
+  };
 
   const handle = (said: string) => {
-    const t = said.toLowerCase();
+    const t = said.toLowerCase().trim();
     const hit = Object.keys(ROUTES).find((n) => t.includes(n.toLowerCase().split(' ')[0]));
-    if (t.includes('stop')) stopNav();
-    else if (t.includes('next')) nextStep();
-    else if (t.includes('repeat') || t.includes('again')) repeat();
+    const f = t.match(/(?:find|where(?:'s| is| are)|look for|locate|search for)\s+(?:my |the |a |an |some )?(.+)/);
+    if (t.includes('stop') || t.includes('cancel')) stopNav();
+    else if (hit && (!f || /\b(go|take|navigate|walk)\b/.test(t))) startNav(hit);
+    else if (f) find(f[1].replace(/[?.!]$/, '').trim());
+    else if (t.includes('closer') || t.includes('look carefully')) closer(EXTRA);
+    else if (t.includes('next') || t.includes('done') || t.includes('reached')) nextStep();
+    else if (t.includes('repeat') || t.includes('again') || t.includes('say that')) repeat();
     else if (t.includes('around') || t.includes('what') || t.includes('see')) around();
+    else if (t.includes('thank')) say(talk.thanks());
+    else if (t.includes('help')) say(talk.help());
+    else if (/\b(hi|hello|hey)\b/.test(t)) say(talk.hello());
     else if (t.includes('test') || t.includes('obstacle')) vision.fake();
-    else if (hit) startNav(hit);
-    else say('I did not catch that. You can say: go to library, next, repeat, what is around me, or stop.');
+    else say(talk.notHeard());
   };
 
   const listen = () => {
@@ -76,7 +99,7 @@ export default function App() {
     r.onerror = (e: any) => {
       setListening(false);
       if (e.error === 'not-allowed') setMic({ s: 'off', note: 'blocked, allow in browser settings' });
-      say('I did not hear you. Tap Speak and try again.');
+      say(talk.didntHear());
     };
     r.onresult = (e: any) => handle(e.results[0][0].transcript);
     beep(1, 1);
@@ -156,6 +179,7 @@ export default function App() {
           <button onClick={nextStep}>Next step</button>
           <button onClick={repeat}>Repeat</button>
           <button onClick={around}>What is around me</button>
+          <button onClick={() => closer(EXTRA)}>Look closer</button>
           <button onClick={stopNav}>Stop</button>
           <button onClick={() => vision.fake()}>Test obstacle</button>
         </div>

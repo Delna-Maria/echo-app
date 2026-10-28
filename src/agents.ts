@@ -2,7 +2,8 @@
 // Vision Agent  -> publishes spatial data to the Message Broker
 // Haptic Agent  -> subscribes, turns proximity into vibration
 // Voice Agent   -> subscribes, filters real hazards, speaks + 3D-panned beep
-import '@tensorflow/tfjs';
+import * as tf from '@tensorflow/tfjs';
+import { talk, nice, isHazard } from './talk';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 
 type Handler = (d: any) => void;
@@ -20,7 +21,9 @@ export const broker = new MessageBroker();
 export const state = { navigating: false };
 
 export type Det = {
-  label: string;
+  label: string;            // everyday name, e.g. 'mobile phone'
+  cls?: string;             // detector's own name, e.g. 'cell phone'
+  stable?: boolean;         // seen in two frames in a row (filters false alarms)
   zone: 0 | 1 | 2;          // 0 left, 1 ahead (middle), 2 right
   level: 0 | 1 | 2;         // 0 far, 1 near, 2 very close
   area: number;
@@ -33,6 +36,16 @@ const MODEL_MAX_BOXES = 10;
 const MODEL_MIN_SCORE = 0.6;
 
 /* ---------- Voice Agent ---------- */
+let chosen: SpeechSynthesisVoice | null = null;
+function pickVoice() {
+  if (chosen) return chosen;
+  const en = speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith('en'));
+  if (!en.length) return null;
+  const score = (v: SpeechSynthesisVoice) => (/natural|neural|google|enhanced/i.test(v.name) ? 4 : 0)
+    + (v.lang === 'en-IN' ? 3 : v.lang === 'en-GB' ? 2 : v.lang === 'en-US' ? 1 : 0) + (v.localService ? 1 : 0);
+  chosen = en.sort((a, b) => score(b) - score(a))[0];
+  return chosen;
+}
 let ac: AudioContext | null = null;
 export function beep(zone: number, level: number) {
   try {
@@ -54,9 +67,10 @@ export const voice = {
     if (!('speechSynthesis' in window) || this.queue.length === 0 || speechSynthesis.speaking) return;
     const next = this.queue.shift()!;
     const u = new SpeechSynthesisUtterance(next);
-    u.rate = 0.92;
-    u.pitch = 1.04;
-    u.lang = 'en-US';
+    u.rate = 0.98;
+    u.pitch = 1.03;
+    const v = pickVoice();
+    if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'en-US';
     u.onend = () => { this.speaking = false; this.flush(); };
     u.onerror = () => { this.speaking = false; this.flush(); };
     this.speaking = true;
@@ -92,25 +106,21 @@ export const voice = {
 };
 let lastWarn = 0;
 let lastAlertKey = '';
-const describeHazard = (hz: Det) => {
-  if (hz.level === 2) return `Obstacle ${SIDE[hz.zone]}, very close.`;
-  if (hz.level === 1) return `Obstacle ${SIDE[hz.zone]}, nearby.`;
-  return `Obstacle ${SIDE[hz.zone]}, in the distance.`;
-};
 broker.subscribe('spatial', (d) => {
   if (!state.navigating && !d.force) return;
   const hz: Det | undefined = [...(d.detections || [])]
-    .filter((x: Det) => x.level > 0 && x.area > 0.04)
+    .filter((x: Det) => x.level > 0 && x.area > 0.04 && isHazard(x.cls || x.label) && (x.stable || d.force))
     .sort((a: Det, b: Det) => b.area - a.area)[0];
   if (!hz) return;
   const alertKey = `${hz.label}:${hz.zone}:${hz.level}`;
   const now = Date.now();
-  const cooldown = alertKey === lastAlertKey ? 5500 : 2500;
+  const prevKey = lastAlertKey;
+  const cooldown = alertKey === prevKey ? 5500 : 2500;
   if (now - lastWarn < cooldown) return;
   lastWarn = now;
   lastAlertKey = alertKey;
   beep(hz.zone, hz.level);
-  voice.speak(describeHazard(hz), false);
+  voice.speak(talk.warn(hz.label, hz.zone, hz.level, alertKey === prevKey), false);
 });
 
 /* ---------- Haptic Agent ---------- */
@@ -127,17 +137,20 @@ export const vision = {
   timer: 0 as any,
   running: false,
   last: [] as Det[],
+  prev: new Set<string>(),
   async start(video: HTMLVideoElement, onCamera?: () => void) {
     this.running = true;
     this.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
     video.srcObject = this.stream;
     await video.play().catch(() => {});
     onCamera && onCamera();
+    try { await tf.setBackend('webgl'); await tf.ready(); } catch (e) {}
     if (!this.model) this.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
 
     let lastTick = 0;
     const tick = async () => {
       if (!this.running) return;
+      if (document.hidden) { this.timer = setTimeout(tick, 1000); return; } // save battery when app is in background
       const now = Date.now();
       if (now - lastTick < DETECT_INTERVAL_MS) {
         this.timer = setTimeout(tick, DETECT_INTERVAL_MS - (now - lastTick));
@@ -157,13 +170,17 @@ export const vision = {
               const area = (w * h) / (W * H);
               const cx = (x + w / 2) / W;
               return {
-                label: p.class,
+                label: nice(p.class),
+                cls: p.class,
                 zone: cx < 0.33 ? 0 : cx > 0.67 ? 2 : 1,
                 level: area > 0.25 ? 2 : area > 0.08 ? 1 : 0,
                 area,
                 box: [x / W, y / H, w / W, h / H],
               } as Det;
             });
+          const keys = new Set(dets.map((d) => d.cls + d.zone));
+          dets.forEach((d) => { d.stable = this.prev.has(d.cls + d.zone); });
+          this.prev = keys;
           this.last = dets.filter((d) => d.level > 0 || d.area > 0.08);
           broker.publish('spatial', { detections: this.last });
         } catch (e) {}
@@ -188,7 +205,7 @@ export const vision = {
   fake() { // backup for the demo: pretend an obstacle appeared
     const zone = Math.floor(Math.random() * 3) as 0 | 1 | 2;
     const level = (Math.random() > 0.5 ? 2 : 1) as 1 | 2;
-    const det: Det = { label: 'obstacle', zone, level, area: 0.2, box: [zone / 3 + 0.03, 0.25, 0.27, 0.5] };
+    const det: Det = { label: 'chair', cls: 'chair', zone, level, area: 0.2, box: [zone / 3 + 0.03, 0.25, 0.27, 0.5] };
     lastWarn = 0;
     broker.publish('spatial', { detections: [det], force: true });
   },
