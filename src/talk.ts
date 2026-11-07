@@ -19,7 +19,7 @@ export const isHazard = (cls: string) => !SMALL.has(cls);
 
 const an = (w: string) => (/^[aeiou]/i.test(w) ? 'an ' : 'a ') + w;
 const where = (z: number) => ['on your left', 'right in front of you', 'on your right'][z];
-const away = (lv: number) => ['a few steps away', 'two or three steps away', 'about a step away'][lv];
+const away = (lv: number, m?: number) => (m != null ? `about ${m.toFixed(1)} metres away` : ['a few steps away', 'two or three steps away', 'about a step away'][lv]);
 const list = (a: string[]) => (a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]);
 const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
@@ -41,18 +41,18 @@ export const talk = {
   noCamera: () => "I can't use the camera right now. Check the connection list.",
   thinking: () => pick(["Okay, give me a moment to take a closer look.", "Sure, let me have a careful look."]),
   closerFailed: () => "Sorry, I couldn't take a closer look just now. Try again in a moment.",
-  warn: (label: string, zone: number, level: number, again: boolean) =>
-    again ? `Still ${an(label)} ${where(zone)}, ${away(level)}.`
-    : `${level === 2 ? pick(['Careful,', 'Watch out,']) : pick(['Heads up,', 'Just so you know,'])} ${an(label)} ${where(zone)}, ${away(level)}.`,
+  warn: (label: string, zone: number, level: number, again: boolean, m?: number) =>
+    again ? `Still ${an(label)} ${where(zone)}, ${away(level, m)}.`
+    : `${level === 2 ? pick(['Careful,', 'Watch out,']) : pick(['Heads up,', 'Just so you know,'])} ${an(label)} ${where(zone)}, ${away(level, m)}.`,
   describe: (dets: Det[]) => {
     if (!dets.length) return "I can't make out anything clearly right now. Try holding the phone a little higher and steady.";
     const top = [...dets].sort((a, b) => b.area - a.area).slice(0, 4);
-    const parts = top.map((d) => `${an(d.label)} ${where(d.zone)}, ${away(d.level)}`);
+    const parts = top.map((d) => `${an(d.label)} ${where(d.zone)}, ${away(d.level, d.dist)}`);
     return `${pick(['Right now I can see', 'Looking ahead, I can see', 'I can see'])} ${list(parts)}.`;
   },
   found: (what: string, dets: Det[]) => {
     if (!dets.length) return `I can't see ${what} right now. Turn slowly and ask me again.`;
     const d = [...dets].sort((a, b) => b.area - a.area)[0];
-    return `${pick(['Found it!', 'I see it.', 'Got it.'])} The ${what} is ${where(d.zone)}, ${away(d.level)}.`;
+    return `${pick(['Found it!', 'I see it.', 'Got it.'])} The ${what} is ${where(d.zone)}, ${away(d.level, d.dist)}.`;
   },
 };
