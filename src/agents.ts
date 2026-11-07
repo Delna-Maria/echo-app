@@ -5,6 +5,7 @@
 import * as tf from '@tensorflow/tfjs';
 import { talk, nice, isHazard } from './talk';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import { depth, levelFromMetres } from './depth';
 
 type Handler = (d: any) => void;
 class MessageBroker {
@@ -27,6 +28,7 @@ export type Det = {
   zone: 0 | 1 | 2;          // 0 left, 1 ahead (middle), 2 right
   level: 0 | 1 | 2;         // 0 far, 1 near, 2 very close
   area: number;
+  dist?: number;            // real distance in metres from the Kinect (when connected)
   box: [number, number, number, number]; // x, y, w, h (0..1)
 };
 const SIDE = ['on your left', 'ahead', 'on your right'];
@@ -120,7 +122,7 @@ broker.subscribe('spatial', (d) => {
   lastWarn = now;
   lastAlertKey = alertKey;
   beep(hz.zone, hz.level);
-  voice.speak(talk.warn(hz.label, hz.zone, hz.level, alertKey === prevKey), false);
+  voice.speak(talk.warn(hz.label, hz.zone, hz.level, alertKey === prevKey, hz.dist), false);
 });
 
 /* ---------- Haptic Agent ---------- */
@@ -169,15 +171,26 @@ export const vision = {
               const [x, y, w, h] = p.bbox;
               const area = (w * h) / (W * H);
               const cx = (x + w / 2) / W;
+              const box: [number, number, number, number] = [x / W, y / H, w / W, h / H];
+              const dist = depth.metresForBox(box);           // Kinect depth, null if not connected
               return {
                 label: nice(p.class),
                 cls: p.class,
                 zone: cx < 0.33 ? 0 : cx > 0.67 ? 2 : 1,
-                level: area > 0.25 ? 2 : area > 0.08 ? 1 : 0,
+                // real distance when the Kinect is connected, otherwise fall back to box size
+                level: dist != null ? levelFromMetres(dist) : area > 0.25 ? 2 : area > 0.08 ? 1 : 0,
                 area,
-                box: [x / W, y / H, w / W, h / H],
+                dist: dist ?? undefined,
+                box,
               } as Det;
             });
+          // Depth-only obstacles: something close that the camera AI could not name (wall, glass, pillar...)
+          depth.nearestByZone().forEach((m, z) => {
+            if (m == null || m >= depth.UNKNOWN_OBSTACLE_M) return;
+            if (dets.some((d) => d.zone === z && d.level > 0 && isHazard(d.cls || d.label))) return;
+            dets.push({ label: 'obstacle', cls: 'obstacle', zone: z as 0 | 1 | 2, level: levelFromMetres(m),
+              area: 0.1, dist: m, box: [z / 3, 0.2, 1 / 3, 0.6] } as Det);
+          });
           const keys = new Set(dets.map((d) => d.cls + d.zone));
           dets.forEach((d) => { d.stable = this.prev.has(d.cls + d.zone); });
           this.prev = keys;

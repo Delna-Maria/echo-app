@@ -3,6 +3,7 @@ import { broker, voice, vision, state, beep, Det } from './agents';
 import { ROUTES } from './routes';
 import { talk, nice } from './talk';
 import { lookFor, EXTRA } from './finder';
+import { depth } from './depth';
 import './styles.css';
 
 type Dev = { s: 'connected' | 'off' | 'waiting'; note: string };
@@ -23,6 +24,7 @@ export default function App() {
   const [listening, setListening] = useState(false);
   const [ar, setAr] = useState(4 / 3);
   const [cam, setCam] = useState<Dev>({ s: 'waiting', note: '' });
+  const [kin, setKin] = useState<Dev>({ s: 'waiting', note: 'start the bridge' });
   const [mic, setMic] = useState<Dev>({ s: 'waiting', note: 'tap Speak to allow' });
   // Haptic wristband and in-ear module: stand-ins until the real hardware arrives
   const [haptic] = useState<Dev>('vibrate' in navigator
@@ -113,6 +115,14 @@ export default function App() {
     return () => vision.stop();
   }, []);
 
+  /* ----- Kinect depth bridge (add ?kinect=ws://IP:8765 to the page address to change it, ?kinect=off to disable) ----- */
+  useEffect(() => {
+    const q = new URLSearchParams(location.search).get('kinect');
+    if (q === 'off') { setKin({ s: 'off', note: 'disabled, using camera only' }); return; }
+    depth.start(q || 'ws://localhost:8765', (s, note) => setKin({ s, note }));
+    return () => depth.stop();
+  }, []);
+
   /* ----- microphone permission status ----- */
   useEffect(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -136,9 +146,10 @@ export default function App() {
     (d.detections as Det[]).forEach((x) => {
       const bx = x.box[0] * c.width, by = x.box[1] * c.height, bw = x.box[2] * c.width, bh = x.box[3] * c.height;
       g.strokeStyle = '#3f2a96'; g.strokeRect(bx, by, bw, bh);
-      const tw = g.measureText(x.label).width + 12;
+      const lab = x.label + (x.dist != null ? ' ' + x.dist.toFixed(1) + ' m' : '');
+      const tw = g.measureText(lab).width + 12;
       g.fillStyle = '#3f2a96'; g.fillRect(bx, Math.max(0, by - fs - 6), tw, fs + 6);
-      g.fillStyle = '#fff'; g.fillText(x.label, bx + 6, Math.max(fs, by - 8));
+      g.fillStyle = '#fff'; g.fillText(lab, bx + 6, Math.max(fs, by - 8));
     });
   }), []);
 
@@ -160,6 +171,7 @@ export default function App() {
         <h2 id="conn">Connections</h2>
         <ul>
           <Row name="Camera" d={cam} />
+          <Row name="Kinect depth sensor" d={kin} />
           <Row name="Microphone" d={mic} />
           <Row name="Haptic wristband" d={haptic} />
           <Row name="In-ear module" d={ear} />

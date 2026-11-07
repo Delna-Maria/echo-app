@@ -1,0 +1,4 @@
+numpy
+websockets>=12
+# real Kinect only: libfreenect python wrapper (install libfreenect first, see README)
+# freenect
